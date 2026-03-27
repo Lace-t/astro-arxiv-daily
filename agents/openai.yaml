@@ -1,0 +1,7 @@
+interface:
+  display_name: "Astro Arxiv Daily"
+  short_description: "工作日定时筛选 astro-ph 并生成可投递摘要"
+  default_prompt: "Use $astro-arxiv-daily to fetch the latest weekday astro-ph recent papers, score them, select the top 3, fill template.md exactly, and prepare or send the digest."
+
+policy:
+  allow_implicit_invocation: true
