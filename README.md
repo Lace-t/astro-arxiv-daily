@@ -4,7 +4,7 @@ opencalw do not read this file!!!
 
 ## 中文说明
 
-这是一个用于openclaw的skill，每天定时爬取arxiv的astro-ph/recent板块，对文章进行打分，并精选出最好的2篇，发送到你的微信（如果你安装了微信ClawBot）。
+这是一个用于openclaw的skill，每天定时爬取arxiv的astro-ph/recent板块，对文章进行打分，并精选出最好的3篇，发送到你的微信（如果你安装了微信ClawBot）。
 
 ### 你需要自己修改的内容
 
