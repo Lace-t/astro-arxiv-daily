@@ -61,6 +61,11 @@ bash ./install-cron.sh
 ### 本地调试运行
 
 ```bash
+vim ./scripts/run_once.sh
+```
+将 `MODEL_CANDIDATES` 里设置为你的模型
+
+```bash
 bash ./scripts/run_once.sh
 ```
 
@@ -147,6 +152,12 @@ bash ./install-cron.sh
   Edit this if you want a different final analysis structure.
 
 ### Local Debug Run
+
+
+```bash
+vim ./scripts/run_once.sh
+```
+set your LLM model in  `MODEL_CANDIDATES` 
 
 ```bash
 bash ./scripts/run_once.sh
