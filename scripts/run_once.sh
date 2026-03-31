@@ -12,19 +12,15 @@ TOP3_CONTEXT_JSON="$LOG_DIR/${RUN_DATE}-top3-context.json"
 TOP3_NOTES_TXT="$LOG_DIR/${RUN_DATE}-top3-notes.txt"
 PROMPT_FILE="$LOG_DIR/${RUN_DATE}-run-once-prompt.md"
 RAW_RESPONSE="$LOG_DIR/${RUN_DATE}-run-once-response.txt"
+SCORING_JSON="$LOG_DIR/${RUN_DATE}-scoring.json"
 FINAL_OUTPUT="$OUT_DIR/${RUN_DATE}-top3.txt"
 OPENCLAW_BIN="${OPENCLAW_BIN:-$(command -v openclaw || true)}"
 OPENCLAW_CONFIG="${OPENCLAW_CONFIG:-$HOME/.openclaw/openclaw.json}"
 CURRENT_MODEL="$(/usr/bin/python3 -c "import json; print(json.load(open('$OPENCLAW_CONFIG'))['agents']['defaults']['model']['primary'])")"
-MODEL_CANDIDATES=(
-  "sjtu/deepseek-v3.2"
-  "sjtu/minimax"
-  "sjtu/minimax-m2.5"
-  "sjtu/qwen3coder"
-  "sjtu/deepseek-reasoner"
-  "sjtu/deepseek-chat"
-  "vllm-local/Qwen3.5-9B-GPTQ-4bit"
-)
+DELIVERY_ENABLED="${ASTRO_ARXIV_DAILY_SEND_WEIXIN:-0}"
+DELIVERY_CHANNEL="${ASTRO_ARXIV_DAILY_CHANNEL:-openclaw-weixin}"
+DELIVERY_ACCOUNT_ID="${ASTRO_ARXIV_DAILY_ACCOUNT_ID:-}"
+DELIVERY_TO="${ASTRO_ARXIV_DAILY_TO:-}"
 
 export PATH="$(dirname "$OPENCLAW_BIN"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 unset LD_LIBRARY_PATH
@@ -39,14 +35,41 @@ if [[ ! -f "$OPENCLAW_CONFIG" ]]; then
   exit 1
 fi
 
+if [[ -f "$ROOT/config.local.sh" ]]; then
+  # Allow local delivery settings to be shared by both manual runs and cron-driven runs.
+  # shellcheck disable=SC1091
+  source "$ROOT/config.local.sh"
+  DELIVERY_ENABLED="${ASTRO_ARXIV_DAILY_SEND_WEIXIN:-$DELIVERY_ENABLED}"
+  DELIVERY_CHANNEL="${ASTRO_ARXIV_DAILY_CHANNEL:-$DELIVERY_CHANNEL}"
+  DELIVERY_ACCOUNT_ID="${ASTRO_ARXIV_DAILY_ACCOUNT_ID:-$DELIVERY_ACCOUNT_ID}"
+  DELIVERY_TO="${ASTRO_ARXIV_DAILY_TO:-$DELIVERY_TO}"
+fi
+
 mkdir -p "$LOG_DIR" "$OUT_DIR"
 cd "$ROOT"
 
-restore_model() {
-  "$OPENCLAW_BIN" models set "$CURRENT_MODEL" >/dev/null 2>&1 || true
+send_weixin_message() {
+  local message="$1"
+  if [[ "$DELIVERY_ENABLED" != "1" ]]; then
+    return 0
+  fi
+  if [[ -z "$DELIVERY_TO" ]]; then
+    echo "delivery_config_incomplete=Set ASTRO_ARXIV_DAILY_TO" >&2
+    exit 1
+  fi
+  if [[ -z "$DELIVERY_ACCOUNT_ID" ]]; then
+    echo "delivery_config_incomplete=Set ASTRO_ARXIV_DAILY_ACCOUNT_ID" >&2
+    exit 1
+  fi
+  "$OPENCLAW_BIN" message send \
+    --channel "$DELIVERY_CHANNEL" \
+    --account "$DELIVERY_ACCOUNT_ID" \
+    --target "$DELIVERY_TO" \
+    --message "$message" \
+    --json >/dev/null
 }
 
-trap restore_model EXIT
+send_weixin_message "astro-arxiv-daily 已开始执行 ${RUN_DATE} 的任务。我会在抓取完成、选出 Top 3、以及最终摘要生成后继续通知你。"
 
 bash "$ROOT/scripts/fetch_astro_recent.sh"
 
@@ -57,14 +80,21 @@ bash "$ROOT/scripts/fetch_astro_recent.sh"
   --abstract-cache-dir "$LOG_DIR/abstract-cache" \
   --output "$CANDIDATES_JSON"
 
+TODAY_CANDIDATE_COUNT="$(
+  /usr/bin/python3 -c "import json; data=json.load(open('$CANDIDATES_JSON')); print(data['total_candidates'])"
+)"
+send_weixin_message "astro-arxiv-daily 已成功获取今日 arXiv astro-ph 文献，共 ${TODAY_CANDIDATE_COUNT} 篇。"
+
 /usr/bin/python3 "$ROOT/scripts/score_candidates.py" \
   --candidates "$CANDIDATES_JSON" \
-  --output "$LOG_DIR/${RUN_DATE}-scoring.json" \
+  --output "$SCORING_JSON" \
   --date "$RUN_DATE"
 
 mapfile -t TOP3_IDS < <(
-  /usr/bin/python3 -c "import json; data=json.load(open('$LOG_DIR/${RUN_DATE}-scoring.json')); print('\n'.join(data['top3']))"
+  /usr/bin/python3 -c "import json; data=json.load(open('$SCORING_JSON')); print('\n'.join(data['top3']))"
 )
+
+send_weixin_message "astro-arxiv-daily 已选出得分最高的 3 篇论文，arXiv 编号分别为：${TOP3_IDS[*]}。"
 
 for arxiv_id in "${TOP3_IDS[@]}"; do
   bash "$ROOT/scripts/fetch_paper_artifacts.sh" "$arxiv_id"
@@ -72,7 +102,7 @@ done
 
 /usr/bin/python3 "$ROOT/scripts/build_top3_context.py" \
   --candidates "$CANDIDATES_JSON" \
-  --scoring "$LOG_DIR/${RUN_DATE}-scoring.json" \
+  --scoring "$SCORING_JSON" \
   --output "$TOP3_CONTEXT_JSON" \
   --final-output "$FINAL_OUTPUT"
 
@@ -117,37 +147,26 @@ Workflow:
 14. Return the full final bundle directly as your final response text only.
 EOF
 
-run_succeeded=0
-for model_id in "${MODEL_CANDIDATES[@]}"; do
-  attempt_session_id="${SESSION_ID}-$(printf '%s' "$model_id" | tr '/.' '__')"
-  attempt_session_file="${HOME}/.openclaw/agents/main/sessions/${attempt_session_id}.jsonl"
-  "$OPENCLAW_BIN" models set "$model_id" >/dev/null
-  printf 'model_attempt=%s\n' "$model_id"
-  : > "$RAW_RESPONSE"
-  rm -f "$FINAL_OUTPUT"
-  "$OPENCLAW_BIN" agent \
-    --local \
-    --session-id "$attempt_session_id" \
-    --thinking medium \
-    --timeout 1800 \
-    --message "$(cat "$PROMPT_FILE")" | tee "$RAW_RESPONSE" || true
-  if /usr/bin/python3 "$ROOT/scripts/extract_session_text.py" \
-    --session "$attempt_session_file" \
-    --output "$FINAL_OUTPUT" >/dev/null 2>&1; then
-    run_succeeded=1
-    break
-  fi
-done
+attempt_session_file="${HOME}/.openclaw/agents/main/sessions/${SESSION_ID}.jsonl"
+printf 'model_in_use=%s\n' "$CURRENT_MODEL"
+: > "$RAW_RESPONSE"
+rm -f "$FINAL_OUTPUT"
+"$OPENCLAW_BIN" agent \
+  --local \
+  --session-id "$SESSION_ID" \
+  --thinking medium \
+  --timeout 1800 \
+  --message "$(cat "$PROMPT_FILE")" | tee "$RAW_RESPONSE" || true
 
-if [[ "$run_succeeded" -ne 1 ]]; then
+if ! /usr/bin/python3 "$ROOT/scripts/extract_session_text.py" \
+  --session "$attempt_session_file" \
+  --output "$FINAL_OUTPUT" >/dev/null 2>&1; then
   echo "run_once_failed=final_output_not_created" >&2
   exit 1
 fi
 
-printf 'candidates_json=%s\n' "$CANDIDATES_JSON"
-printf 'top3_context_json=%s\n' "$TOP3_CONTEXT_JSON"
-printf 'top3_notes_txt=%s\n' "$TOP3_NOTES_TXT"
-printf 'prompt_file=%s\n' "$PROMPT_FILE"
-printf 'raw_response=%s\n' "$RAW_RESPONSE"
+send_weixin_message "$(<"$FINAL_OUTPUT")"
+bash "$ROOT/scripts/cleanup_logs.sh"
+
 printf 'expected_output=%s\n' "$FINAL_OUTPUT"
-printf 'expected_scoring=%s\n' "$LOG_DIR/${RUN_DATE}-scoring.json"
+printf 'logs_cleaned=%s\n' "$LOG_DIR"

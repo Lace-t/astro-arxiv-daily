@@ -2,7 +2,18 @@
 import argparse
 import json
 import pathlib
+import re
 import sys
+
+
+PAPER_BLOCK_START_RE = re.compile(r"(?m)^English Title:")
+
+
+def trim_to_first_paper_block(text: str) -> str:
+    match = PAPER_BLOCK_START_RE.search(text)
+    if not match:
+        return text.strip()
+    return text[match.start():].strip()
 
 
 def main() -> int:
@@ -40,7 +51,8 @@ def main() -> int:
         print("error=no_assistant_text_found", file=sys.stderr)
         return 1
 
-    output_path.write_text(last_text.rstrip() + "\n", encoding="utf-8")
+    trimmed_text = trim_to_first_paper_block(last_text)
+    output_path.write_text(trimmed_text + "\n", encoding="utf-8")
     print(f"output={output_path}")
     return 0
 

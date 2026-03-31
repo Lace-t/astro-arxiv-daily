@@ -9,4 +9,5 @@ if [[ ! -d "$LOG_DIR" ]]; then
   exit 0
 fi
 
+touch "$LOG_DIR/.gitkeep"
 find "$LOG_DIR" -mindepth 1 ! -name '.gitkeep' -exec rm -rf {} +

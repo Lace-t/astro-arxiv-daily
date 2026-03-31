@@ -1,6 +1,6 @@
 ---
 name: astro-arxiv-daily
-description: Fetch, rank, analyze, and deliver a weekday arXiv astrophysics digest for OpenClaw. Use when the user wants a recurring or on-demand workflow that reads the latest papers from arXiv astro-ph recent submissions, scores each paper on novelty, results conviction, and importance, selects the top three papers, fills a strict analysis template from template.md, and prepares the finished summaries for a configurable delivery channel.
+description: Fetch, rank, analyze, and deliver a weekday arXiv astrophysics digest for OpenClaw. Use when the user wants a recurring or on-demand workflow that reads the latest papers from arXiv astro-ph recent submissions, scores each paper on novelty, results conviction, and importance, selects the top three papers, fills a strict analysis template from template.md, and prepares the finished summaries for delivery to a configured OpenClaw target user.
 ---
 
 # Astro Arxiv Daily
@@ -124,16 +124,20 @@ If the sending tool supports only plain text, send plain text. Do not rely on Ma
 ## OpenClaw Execution Rules
 
 - For scheduled delivery, prefer an exact weekday cron or automation at `11:30` local time instead of a loose polling loop.
+- The model used at execution time must be the user's current OpenClaw default model at that moment.
 - If OpenClaw automation requires a command or prompt body, use this skill from the skill root.
+- The cron-facing prompt should minimize outer-agent reasoning and push execution into `bash scripts/run_once.sh` immediately.
 - Configure the actual delivery target for your machine in `references/openclaw-weixin-delivery.md`, `config.local.sh`, or `install-cron.sh`.
-- The plugin requires explicit outbound delivery fields for scheduled pushes:
+- Scheduled delivery must use:
   - `delivery.channel: openclaw-weixin`
-  - `delivery.to: <target_user_id@im.wechat>`
   - `delivery.accountId: <weixin_account_id>`
-- The target user ID must be a concrete Weixin ID ending with `@im.wechat`.
-- If multiple Weixin bot accounts are installed, never rely on implicit account selection for cron delivery. Set `delivery.accountId` explicitly.
-- If the Weixin target user identifier is not already configured in the active context, stop and ask for it.
-- If needed, inspect your local OpenClaw account files under `~/.openclaw/` to list account IDs and confirm the logged-in bot user.
+  - `delivery.to: <target_user_id@im.wechat>`
+- The target user ID must be a concrete OpenClaw target ending with `@im.wechat`.
+- The target user ID must be the exact inbound `from_user_id` observed by the Weixin plugin for that account.
+- In this skill, local one-shot delivery and scheduled delivery must point at the same logical target:
+  - local run: `ASTRO_ARXIV_DAILY_CHANNEL`, `ASTRO_ARXIV_DAILY_ACCOUNT_ID`, `ASTRO_ARXIV_DAILY_TO`
+  - scheduled job: `delivery.channel`, `delivery.accountId`, `delivery.to`
+- If the target user identifier is not already configured, stop and ask for it.
 
 ## Local One-Shot Runner
 
@@ -143,8 +147,10 @@ If the sending tool supports only plain text, send plain text. Do not rely on Ma
   - refresh the arXiv recent inputs
   - build `logs/YYYY-MM-DD-candidates.json`
   - invoke the skill through `openclaw agent --local`
+  - use the current OpenClaw default model instead of switching to fallback model candidates
   - write `output/YYYY-MM-DD-top3.txt`
   - write `logs/YYYY-MM-DD-scoring.json`
+- Scheduled jobs should rely on this runner rather than reimplementing its logic in the outer cron agent.
 - During a local one-shot run, do not send to the delivery channel unless the user explicitly asks for delivery in that run.
 - After a successful delivery, clean `logs/` and keep only `.gitkeep`. Use `bash scripts/cleanup_logs.sh`.
 
@@ -154,10 +160,10 @@ When creating an OpenClaw scheduled task for this skill, use a weekday-only `11:
 
 ```yaml
 delivery:
-  mode: announce
-  channel: openclaw-weixin
-  to: "<target_user_id@im.wechat>"
+  channel: "openclaw-weixin"
   accountId: "<weixin_account_id>"
+  mode: announce
+  to: "<target_user_id@im.wechat>"
 timezone: Asia/Shanghai
 cron: "30 11 * * 1-5"
 ```
